@@ -1,0 +1,13 @@
+{
+  "name": "sbti-personality-test",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node scripts/verify.mjs",
+    "dev": "npx wrangler pages dev public",
+    "deploy": "npx wrangler pages deploy public --project-name sbti-personality-test"
+  },
+  "devDependencies": {
+    "wrangler": "^4.81.1"
+  }
+}

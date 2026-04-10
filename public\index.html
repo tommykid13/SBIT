@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="SBTI 人格测试网页版。基于 15 维度与 30 道题目的趣味测试，纯前端计算，适合部署到 GitHub 和 Cloudflare Pages。"
+    />
+    <title>SBTI 人格测试</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700;900&family=Noto+Serif+SC:wght@500;700;900&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="site-bg" aria-hidden="true">
+      <div class="orb orb-a"></div>
+      <div class="orb orb-b"></div>
+      <div class="grid-noise"></div>
+    </div>
+    <main id="app" class="app-shell"></main>
+    <div id="flash" class="flash" aria-live="polite"></div>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
