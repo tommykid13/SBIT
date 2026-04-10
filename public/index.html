@@ -2,12 +2,27 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
     <meta
       name="description"
       content="SBTI 人格测试网页版。基于 15 维度与 30 道题目的趣味测试，纯前端计算，适合部署到 GitHub 和 Cloudflare Pages。"
     />
+    <meta name="theme-color" content="#110f11" />
+    <meta name="format-detection" content="telephone=no" />
     <title>SBTI 人格测试</title>
+    <script>
+      if (
+        window.location.protocol === "http:" &&
+        !/^(localhost|127(?:\.\d{1,3}){3})$/i.test(window.location.hostname)
+      ) {
+        window.location.replace(
+          `https://${window.location.host}${window.location.pathname}${window.location.search}${window.location.hash}`,
+        );
+      }
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link

@@ -10,11 +10,12 @@ import {
 } from "./logic.js";
 
 const STORAGE_KEY = "sbti-personality-test-state-v1";
+const SHARE_QUERY_KEY = "sbti";
 
 const app = document.querySelector("#app");
 const flash = document.querySelector("#flash");
 
-const state = loadState();
+const state = loadState(getSharedAnswersFromLocation());
 
 if (state.phase === "result" && !isQuizComplete(state.answers)) {
   state.phase = "intro";
@@ -23,7 +24,15 @@ if (state.phase === "result" && !isQuizComplete(state.answers)) {
 render();
 bindGlobalEvents();
 
-function loadState() {
+function loadState(sharedAnswers = null) {
+  if (sharedAnswers && isQuizComplete(sharedAnswers)) {
+    return {
+      phase: "result",
+      currentIndex: Math.max(getQuizSequence(sharedAnswers).length - 1, 0),
+      answers: sharedAnswers,
+    };
+  }
+
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return createDefaultState();
@@ -112,6 +121,18 @@ function bindGlobalEvents() {
       } catch {
         showFlash("复制失败了，可能是浏览器权限拦截。");
       }
+      return;
+    }
+
+    if (action === "share-result") {
+      if (!isQuizComplete(state.answers)) return;
+      await shareResult();
+      return;
+    }
+
+    if (action === "download-card") {
+      if (!isQuizComplete(state.answers)) return;
+      await downloadResultCard();
     }
   });
 
@@ -173,10 +194,6 @@ function renderIntro() {
       <div class="hero-copy">
         <p class="eyebrow">SBTI Personality Test</p>
         <h1>把你的脑回路拆成 <span>15 个维度</span> 再重新拼回去。</h1>
-        <p class="hero-text">
-          这是一份带点抽象感的趣味人格测试。全站纯前端计算，不需要后端、不需要 Python，
-          所有结果都在浏览器本地完成。
-        </p>
         <div class="hero-actions">
           <button class="btn btn-primary" data-action="start">开始测试</button>
           ${
@@ -350,8 +367,9 @@ function renderResult() {
           <p class="result-sub">${result.sub}</p>
 
           <div class="hero-actions">
-            <button class="btn btn-primary" data-action="copy-result">复制结果摘要</button>
-            <button class="btn btn-secondary" data-action="restart">重新测试</button>
+            <button class="btn btn-primary" data-action="share-result">分享结果</button>
+            <button class="btn btn-secondary" data-action="download-card">生成图片卡片</button>
+            <button class="btn btn-ghost" data-action="restart">重新测试</button>
           </div>
 
           ${
@@ -468,4 +486,355 @@ function showFlash(message) {
   showFlash.timer = window.setTimeout(() => {
     flash.classList.remove("visible");
   }, 2400);
+}
+
+function getSharedAnswersFromLocation() {
+  try {
+    const url = new URL(window.location.href);
+    const encoded = url.searchParams.get(SHARE_QUERY_KEY);
+    if (!encoded) return null;
+
+    const normalized = encoded.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized + "=".repeat((4 - (normalized.length % 4 || 4)) % 4);
+    const binary = window.atob(padded);
+    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+    const text = new TextDecoder().decode(bytes);
+    const parsed = JSON.parse(text);
+
+    if (!parsed || typeof parsed !== "object") {
+      return null;
+    }
+
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function encodeAnswersForShare(answers) {
+  const json = JSON.stringify(answers);
+  const bytes = new TextEncoder().encode(json);
+  let binary = "";
+
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+
+  return window
+    .btoa(binary)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+function buildShareUrl(answers) {
+  const url = new URL(window.location.href);
+  url.searchParams.set(SHARE_QUERY_KEY, encodeAnswersForShare(answers));
+  return url.toString();
+}
+
+async function shareResult() {
+  const result = computeResult(state.answers);
+  const url = buildShareUrl(state.answers);
+  const title = `${result.final_type.code} · ${result.final_type.cn}`;
+  const text = `${title}\n${result.badge}\n${result.final_type.intro}`;
+
+  if (navigator.share) {
+    try {
+      await navigator.share({ title, text, url });
+      showFlash("分享面板已打开。");
+      return;
+    } catch (error) {
+      if (error?.name === "AbortError") {
+        return;
+      }
+    }
+  }
+
+  try {
+    await navigator.clipboard.writeText(`${text}\n${url}`);
+    showFlash("分享内容已复制到剪贴板。");
+  } catch {
+    showFlash("分享失败了，可能是浏览器权限拦截。");
+  }
+}
+
+async function downloadResultCard() {
+  try {
+    const result = computeResult(state.answers);
+    const blob = await createResultCardBlob(result, state.answers);
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const safeCode = result.final_type.code.replace(/[^a-z0-9-]+/gi, "-");
+
+    link.href = objectUrl;
+    link.download = `sbti-${safeCode}.png`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 2000);
+    showFlash("结果卡片已生成。");
+  } catch {
+    showFlash("图片卡片生成失败了，请稍后再试。");
+  }
+}
+
+async function createResultCardBlob(result, answers) {
+  if (document.fonts?.ready) {
+    await document.fonts.ready;
+  }
+
+  const canvas = document.createElement("canvas");
+  const width = 1200;
+  const height = 1600;
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  const theme = getThemeForType(result.final_type.code);
+  const image = await loadResultImage(getImagePath(result.final_type.code));
+
+  const background = context.createLinearGradient(0, 0, width, height);
+  background.addColorStop(0, "#0f0b0d");
+  background.addColorStop(0.55, "#1b1216");
+  background.addColorStop(1, "#120f11");
+  context.fillStyle = background;
+  context.fillRect(0, 0, width, height);
+
+  context.save();
+  context.globalAlpha = 0.45;
+  context.fillStyle = theme.accentSoft;
+  context.beginPath();
+  context.arc(170, 220, 180, 0, Math.PI * 2);
+  context.fill();
+  context.beginPath();
+  context.arc(1000, 130, 210, 0, Math.PI * 2);
+  context.fill();
+  context.restore();
+
+  drawRoundedRect(context, 52, 52, width - 104, height - 104, 42);
+  context.fillStyle = "rgba(22, 18, 22, 0.82)";
+  context.fill();
+  context.strokeStyle = "rgba(255,255,255,0.08)";
+  context.lineWidth = 2;
+  context.stroke();
+
+  context.fillStyle = "#ffd8ad";
+  context.font = "600 26px 'Noto Sans SC'";
+  context.fillText("SBTI Personality Test", 96, 132);
+
+  context.fillStyle = "#fff4df";
+  context.font = "900 78px 'Noto Serif SC'";
+  context.fillText(result.final_type.code, 96, 230);
+
+  context.fillStyle = "#ffe1c0";
+  context.font = "700 34px 'Noto Sans SC'";
+  context.fillText(result.final_type.cn, 100, 278);
+
+  context.fillStyle = theme.accentSoft;
+  drawRoundedRect(context, 96, 318, 470, 66, 22);
+  context.fill();
+  context.fillStyle = "#fff5e4";
+  context.font = "600 24px 'Noto Sans SC'";
+  context.fillText(result.badge, 122, 360);
+
+  context.fillStyle = "#fff7ea";
+  context.font = "700 38px 'Noto Sans SC'";
+  const introBottom = drawMultilineText(
+    context,
+    result.final_type.intro,
+    96,
+    446,
+    530,
+    52,
+    2,
+    "#fff7ea",
+  );
+
+  const descBottom = drawMultilineText(
+    context,
+    result.final_type.desc,
+    96,
+    introBottom + 28,
+    530,
+    34,
+    5,
+    "rgba(247, 239, 232, 0.82)",
+    "500 24px 'Noto Sans SC'",
+  );
+
+  if (result.secondary_type) {
+    context.fillStyle = "rgba(255,255,255,0.05)";
+    drawRoundedRect(context, 96, descBottom + 28, 530, 108, 24);
+    context.fill();
+    context.fillStyle = "#ffd8ad";
+    context.font = "600 22px 'Noto Sans SC'";
+    context.fillText("常规人格备选", 122, descBottom + 70);
+    context.fillStyle = "#fff3df";
+    context.font = "700 28px 'Noto Sans SC'";
+    context.fillText(
+      `${result.secondary_type.code} · ${result.secondary_type.cn}`,
+      122,
+      descBottom + 104,
+    );
+  }
+
+  const imageX = 680;
+  const imageY = 112;
+  const imageW = 420;
+  const imageH = 520;
+  drawRoundedRect(context, imageX, imageY, imageW, imageH, 36);
+  context.save();
+  context.clip();
+  if (image) {
+    context.drawImage(image, imageX, imageY, imageW, imageH);
+  } else {
+    const fallback = context.createLinearGradient(imageX, imageY, imageX + imageW, imageY + imageH);
+    fallback.addColorStop(0, theme.accentSoft);
+    fallback.addColorStop(1, "rgba(255,255,255,0.02)");
+    context.fillStyle = fallback;
+    context.fillRect(imageX, imageY, imageW, imageH);
+  }
+  context.restore();
+  context.strokeStyle = "rgba(255,255,255,0.08)";
+  context.lineWidth = 2;
+  drawRoundedRect(context, imageX, imageY, imageW, imageH, 36);
+  context.stroke();
+
+  context.fillStyle = "#ffd8ad";
+  context.font = "600 24px 'Noto Sans SC'";
+  context.fillText("十五维概览", 96, 790);
+
+  const dimensionGroups = groupDimensionsByModel(result);
+  const flatDimensions = dimensionGroups.flatMap((group) => group.items);
+  const cardWidth = 310;
+  const cardHeight = 122;
+  const cardGapX = 22;
+  const cardGapY = 18;
+
+  flatDimensions.forEach((item, index) => {
+    const col = index % 3;
+    const row = Math.floor(index / 3);
+    const x = 96 + col * (cardWidth + cardGapX);
+    const y = 828 + row * (cardHeight + cardGapY);
+
+    context.fillStyle = "rgba(255,255,255,0.05)";
+    drawRoundedRect(context, x, y, cardWidth, cardHeight, 24);
+    context.fill();
+
+    context.fillStyle = "#fff4df";
+    context.font = "700 22px 'Noto Sans SC'";
+    context.fillText(item.code, x + 22, y + 38);
+
+    context.fillStyle = "rgba(247, 239, 232, 0.78)";
+    context.font = "500 18px 'Noto Sans SC'";
+    context.fillText(item.name.replace(`${item.code} `, ""), x + 22, y + 70);
+
+    context.fillStyle = getLevelColor(item.level);
+    drawRoundedRect(context, x + 232, y + 18, 58, 42, 18);
+    context.fill();
+
+    context.fillStyle = "#1b1216";
+    context.font = "700 20px 'Noto Sans SC'";
+    context.fillText(`${item.level} · ${item.score}`, x + 245, y + 46);
+  });
+
+  context.fillStyle = "rgba(247, 239, 232, 0.72)";
+  context.font = "500 22px 'Noto Sans SC'";
+  context.fillText("分享链接", 96, 1496);
+  drawMultilineText(
+    context,
+    buildShareUrl(answers),
+    96,
+    1532,
+    1008,
+    26,
+    2,
+    "rgba(247, 239, 232, 0.58)",
+    "500 18px 'Noto Sans SC'",
+  );
+
+  return await new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) {
+        resolve(blob);
+      } else {
+        reject(new Error("Canvas export failed"));
+      }
+    }, "image/png");
+  });
+}
+
+function drawMultilineText(
+  context,
+  text,
+  x,
+  y,
+  maxWidth,
+  lineHeight,
+  maxLines,
+  color,
+  font = context.font,
+) {
+  context.save();
+  context.font = font;
+  context.fillStyle = color;
+
+  const lines = wrapText(context, text, maxWidth);
+  const visibleLines = maxLines ? lines.slice(0, maxLines) : lines;
+
+  visibleLines.forEach((line, index) => {
+    const isLast = maxLines && index === maxLines - 1 && lines.length > maxLines;
+    const output = isLast ? `${line.slice(0, Math.max(line.length - 1, 1))}…` : line;
+    context.fillText(output, x, y + index * lineHeight);
+  });
+
+  context.restore();
+  return y + visibleLines.length * lineHeight;
+}
+
+function wrapText(context, text, maxWidth) {
+  const lines = [];
+  let currentLine = "";
+
+  for (const character of text) {
+    const testLine = currentLine + character;
+    if (context.measureText(testLine).width > maxWidth && currentLine) {
+      lines.push(currentLine);
+      currentLine = character;
+    } else {
+      currentLine = testLine;
+    }
+  }
+
+  if (currentLine) {
+    lines.push(currentLine);
+  }
+
+  return lines;
+}
+
+function drawRoundedRect(context, x, y, width, height, radius) {
+  const r = Math.min(radius, width / 2, height / 2);
+  context.beginPath();
+  context.moveTo(x + r, y);
+  context.arcTo(x + width, y, x + width, y + height, r);
+  context.arcTo(x + width, y + height, x, y + height, r);
+  context.arcTo(x, y + height, x, y, r);
+  context.arcTo(x, y, x + width, y, r);
+  context.closePath();
+}
+
+function getLevelColor(level) {
+  if (level === "L") return "rgba(134, 199, 255, 0.95)";
+  if (level === "M") return "rgba(255, 214, 128, 0.95)";
+  return "rgba(255, 145, 112, 0.95)";
+}
+
+function loadResultImage(src) {
+  return new Promise((resolve) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => resolve(null);
+    image.src = src;
+  });
 }
